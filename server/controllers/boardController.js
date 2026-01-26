@@ -450,3 +450,347 @@ exports.removeMemberFromBoard = async (req, res) => {
     });
   }
 };
+
+// CHANGE MEMBER ROLE (OWNER ONLY)
+exports.changeMemberRole = async (req, res) => {
+  try {
+    const { boardId, userId } = req.params;
+    const { role } = req.body;
+    const currentUserId = req.user._id;
+
+    if (!["admin", "member"].includes(role)) {
+      return res.status(400).json({ message: "Invalid role" });
+    }
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // 🔒 Only owner can change roles
+    if (board.createdBy.toString() !== currentUserId.toString()) {
+      return res
+        .status(403)
+        .json({ message: "Only owner can change member roles" });
+    }
+
+    // 🔒 Owner role cannot be changed
+    if (board.createdBy.toString() === userId) {
+      return res
+        .status(400)
+        .json({ message: "Owner role cannot be changed" });
+    }
+
+    const member = board.members.find(
+      (m) => m.user.toString() === userId
+    );
+
+    if (!member) {
+      return res.status(404).json({ message: "Member not found in board" });
+    }
+
+    member.role = role;
+    await board.save();
+
+    res.status(200).json({
+      message: "Member role updated successfully",
+      userId,
+      role,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to change member role",
+      error: error.message,
+    });
+  }
+};
+
+// EDIT BOARD (OWNER OR ADMIN)
+exports.editBoard = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const { title } = req.body;
+    const userId = req.user._id;
+
+    if (!title || title.trim() === "") {
+      return res.status(400).json({ message: "Board title is required" });
+    }
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    const isOwner = board.createdBy.toString() === userId.toString();
+
+    const isAdmin = board.members.some(
+      (m) =>
+        m.user.toString() === userId.toString() &&
+        m.role === "admin"
+    );
+
+    if (!isOwner && !isAdmin) {
+      return res
+        .status(403)
+        .json({ message: "Only owner or admin can edit board" });
+    }
+
+    board.title = title;
+    await board.save();
+
+    res.status(200).json({
+      message: "Board updated successfully",
+      boardId: board._id,
+      title: board.title,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to edit board",
+      error: error.message,
+    });
+  }
+};
+
+// VIEW BOARD MEMBERS
+exports.getBoardMembers = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const userId = req.user._id;
+
+    const board = await Board.findById(boardId)
+      .populate("members.user", "name email")
+      .populate("createdBy", "name email");
+
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // 🔒 Check if user is owner or member
+    const isOwner = board.createdBy._id.toString() === userId.toString();
+    const isMember = board.members.some(
+      (m) => m.user._id.toString() === userId.toString()
+    );
+
+    if (!isOwner && !isMember) {
+      return res
+        .status(403)
+        .json({ message: "You are not a member of this board" });
+    }
+
+    res.status(200).json({
+      owner: {
+        _id: board.createdBy._id,
+        name: board.createdBy.name,
+        email: board.createdBy.email,
+        role: "owner",
+      },
+      members: board.members.map((m) => ({
+        _id: m.user._id,
+        name: m.user.name,
+        email: m.user.email,
+        role: m.role,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to fetch board members",
+      error: error.message,
+    });
+  }
+};
+
+// LEAVE BOARD (MEMBER / ADMIN ONLY)
+exports.leaveBoard = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const userId = req.user._id;
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // 🔒 Owner cannot leave
+    if (board.createdBy.toString() === userId.toString()) {
+      return res.status(400).json({
+        message: "Owner cannot leave the board",
+      });
+    }
+
+    const memberIndex = board.members.findIndex(
+      (m) => m.user.toString() === userId.toString()
+    );
+
+    if (memberIndex === -1) {
+      return res.status(403).json({
+        message: "You are not a member of this board",
+      });
+    }
+
+    board.members.splice(memberIndex, 1);
+    await board.save();
+
+    res.status(200).json({
+      message: "You have left the board successfully",
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to leave board",
+      error: error.message,
+    });
+  }
+};
+
+// MARK BOARD AS COMPLETED (OWNER OR ADMIN)
+exports.completeBoard = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const userId = req.user._id;
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    const isOwner = board.createdBy.toString() === userId.toString();
+    const isAdmin = board.members.some(
+      (m) =>
+        m.user.toString() === userId.toString() &&
+        m.role === "admin"
+    );
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({
+        message: "Only owner or admin can complete the board",
+      });
+    }
+
+    board.status = "completed";
+    await board.save();
+
+    res.status(200).json({
+      message: "Board marked as completed",
+      status: board.status,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to complete board",
+      error: error.message,
+    });
+  }
+};
+
+// EDIT TASK (ANY BOARD MEMBER)
+exports.editTask = async (req, res) => {
+  try {
+    const { boardId, columnId, taskId } = req.params;
+    const { title, description } = req.body;
+    const userId = req.user._id;
+
+    if (!title || title.trim() === "") {
+      return res.status(400).json({ message: "Task title is required" });
+    }
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // 🔒 Check board membership
+    const isMember =
+      board.createdBy.toString() === userId.toString() ||
+      board.members.some(
+        (m) => m.user.toString() === userId.toString()
+      );
+
+    if (!isMember) {
+      return res
+        .status(403)
+        .json({ message: "You are not a board member" });
+    }
+
+    const column = board.columns.id(columnId);
+    if (!column) {
+      return res.status(404).json({ message: "Column not found" });
+    }
+
+    const task = column.tasks.id(taskId);
+    if (!task) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+
+    // ✅ Update allowed fields
+    task.title = title;
+    if (description !== undefined) {
+      task.description = description;
+    }
+
+    await board.save();
+
+    res.status(200).json({
+      message: "Task updated successfully",
+      task,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to edit task",
+      error: error.message,
+    });
+  }
+};
+
+// DELETE TASK (ANY BOARD MEMBER)
+// DELETE TASK (ANY BOARD MEMBER)
+exports.deleteTask = async (req, res) => {
+  try {
+    const { boardId, columnId, taskId } = req.params;
+    const userId = req.user._id;
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // 🔒 Check board membership
+    const isMember =
+      board.createdBy.toString() === userId.toString() ||
+      board.members.some(
+        (m) => m.user.toString() === userId.toString()
+      );
+
+    if (!isMember) {
+      return res.status(403).json({
+        message: "You are not a board member",
+      });
+    }
+
+    const column = board.columns.id(columnId);
+    if (!column) {
+      return res.status(404).json({ message: "Column not found" });
+    }
+
+    const taskExists = column.tasks.some(
+      (t) => t._id.toString() === taskId
+    );
+
+    if (!taskExists) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+
+    // ✅ Proper way to delete embedded task
+    column.tasks = column.tasks.filter(
+      (t) => t._id.toString() !== taskId
+    );
+
+    await board.save();
+
+    res.status(200).json({
+      message: "Task deleted successfully",
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to delete task",
+      error: error.message,
+    });
+  }
+};

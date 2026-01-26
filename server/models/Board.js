@@ -155,6 +155,12 @@ const boardSchema = new mongoose.Schema(
       },
     ],
 
+    status: {
+  type: String,
+  enum: ["active", "completed"],
+  default: "active",
+},
+
     deletedFor: [
       {
         type: mongoose.Schema.Types.ObjectId,

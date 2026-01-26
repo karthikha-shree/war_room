@@ -14,6 +14,13 @@ const {
     softDeleteBoard,
     permanentDeleteBoard,
     removeMemberFromBoard,
+    changeMemberRole,
+    editBoard,
+    getBoardMembers,
+    leaveBoard,
+    completeBoard,
+    editTask,
+    deleteTask,
 } = require("../controllers/boardController");
 
 // Create board
@@ -49,4 +56,25 @@ router.delete("/:boardId", protect, permanentDeleteBoard);
 // Remove member from board
 router.delete("/:boardId/members/:userId", protect, removeMemberFromBoard);
 
+// Change member role in board
+router.put(  "/:boardId/members/:userId/role",  protect,  changeMemberRole);
+
+// Edit board details
+router.put("/:boardId", protect, editBoard);
+
+// Get board members
+router.get("/:boardId/members", protect, getBoardMembers);
+
+// Leave board not by owner but by member decision
+router.put("/:boardId/leave", protect, leaveBoard);
+
+// Mark board as completed
+router.put("/:boardId/complete", protect, completeBoard);
+
+// Edit a task within a column
+router.put(  "/:boardId/columns/:columnId/tasks/:taskId",  protect,  editTask);
+
+// DELETE a task within a column
+router.delete(  "/:boardId/columns/:columnId/tasks/:taskId",  protect,  deleteTask);
+  
 module.exports = router;
