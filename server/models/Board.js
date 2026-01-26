@@ -102,6 +102,11 @@ const taskSchema = new mongoose.Schema({
     required: true,
   },
   description: String,
+  assignedTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+  },
   comments: [commentSchema],
 });
 

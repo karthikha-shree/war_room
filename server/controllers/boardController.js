@@ -739,7 +739,7 @@ exports.editTask = async (req, res) => {
   }
 };
 
-// DELETE TASK (ANY BOARD MEMBER)
+
 // DELETE TASK (ANY BOARD MEMBER)
 exports.deleteTask = async (req, res) => {
   try {
@@ -790,6 +790,327 @@ exports.deleteTask = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       message: "Failed to delete task",
+      error: error.message,
+    });
+  }
+};
+// REORDER TASKS WITHIN SAME COLUMN
+exports.reorderTasks = async (req, res) => {
+  try {
+    const { boardId, columnId } = req.params;
+    const { sourceIndex, destinationIndex } = req.body;
+
+    const board = await Board.findById(boardId);
+    if (!board) return res.status(404).json({ message: "Board not found" });
+
+    const column = board.columns.id(columnId);
+    if (!column) return res.status(404).json({ message: "Column not found" });
+
+    const tasks = column.tasks;
+
+    if (
+      sourceIndex < 0 ||
+      destinationIndex < 0 ||
+      sourceIndex >= tasks.length ||
+      destinationIndex >= tasks.length
+    ) {
+      return res.status(400).json({ message: "Invalid indexes" });
+    }
+
+    // 🔥 SAFE REORDER
+    const [movedTask] = tasks.splice(sourceIndex, 1);
+    tasks.splice(destinationIndex, 0, movedTask);
+
+    await board.save({ validateBeforeSave: false });// no validation triggered
+
+    res.json({ message: "Tasks reordered successfully", tasks });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to reorder tasks",
+      error: error.message,
+    });
+  }
+};
+
+exports.assignTask = async (req, res) => {
+  try {
+    const { boardId, columnId, taskId } = req.params;
+    const { userId } = req.body;
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // Check requester is board member
+    const isMember =
+      board.createdBy.toString() === req.user._id.toString() ||
+      board.members.some(
+        (m) => m.user.toString() === req.user._id.toString()
+      );
+
+    if (!isMember) {
+      return res.status(403).json({ message: "Not a board member" });
+    }
+
+    // Check assignee is board member
+    const isAssigneeMember =
+      board.createdBy.toString() === userId ||
+      board.members.some((m) => m.user.toString() === userId);
+
+    if (!isAssigneeMember) {
+      return res
+        .status(400)
+        .json({ message: "Assignee must be board member" });
+    }
+
+    const column = board.columns.id(columnId);
+    if (!column) {
+      return res.status(404).json({ message: "Column not found" });
+    }
+
+    const task = column.tasks.id(taskId);
+    if (!task) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+
+    task.assignedTo = userId;
+    await board.save();
+
+    res.json({ message: "Task assigned successfully", task });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to assign task",
+      error: error.message,
+    });
+  }
+};
+
+exports.renameColumn = async (req, res) => {
+  try {
+    const { boardId, columnId } = req.params;
+    const { title } = req.body;
+
+    if (!title || title.trim() === "") {
+      return res.status(400).json({ message: "Column title is required" });
+    }
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // permission check (owner or admin)
+    const isOwner =
+      board.createdBy.toString() === req.user._id.toString();
+
+    const isAdmin = board.members.some(
+      (m) =>
+        m.user.toString() === req.user._id.toString() &&
+        m.role === "admin"
+    );
+
+    if (!isOwner && !isAdmin) {
+      return res
+        .status(403)
+        .json({ message: "Not allowed to rename column" });
+    }
+
+    const column = board.columns.id(columnId);
+    if (!column) {
+      return res.status(404).json({ message: "Column not found" });
+    }
+
+    column.title = title;
+    await board.save();
+
+    res.json({
+      message: "Column renamed successfully",
+      column,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to rename column",
+      error: error.message,
+    });
+  }
+};
+
+exports.reorderColumns = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const { sourceIndex, destinationIndex } = req.body;
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // permission: owner or admin
+    const isOwner =
+      board.createdBy.toString() === req.user._id.toString();
+
+    const isAdmin = board.members.some(
+      (m) =>
+        m.user.toString() === req.user._id.toString() &&
+        m.role === "admin"
+    );
+
+    if (!isOwner && !isAdmin) {
+      return res
+        .status(403)
+        .json({ message: "Not allowed to reorder columns" });
+    }
+
+    if (
+      sourceIndex < 0 ||
+      destinationIndex < 0 ||
+      sourceIndex >= board.columns.length ||
+      destinationIndex >= board.columns.length
+    ) {
+      return res.status(400).json({ message: "Invalid indexes" });
+    }
+
+    const [movedColumn] = board.columns.splice(sourceIndex, 1);
+    board.columns.splice(destinationIndex, 0, movedColumn);
+
+    // recalculate order
+    board.columns.forEach((col, index) => {
+      col.order = index + 1;
+    });
+
+    await board.save();
+
+    res.json({
+      message: "Columns reordered successfully",
+      columns: board.columns,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to reorder columns",
+      error: error.message,
+    });
+  }
+};
+
+exports.addComment = async (req, res) => {
+  try {
+    const { boardId, columnId, taskId } = req.params;
+    const { text } = req.body;
+
+    if (!text || text.trim() === "") {
+      return res.status(400).json({ message: "Comment text is required" });
+    }
+
+    const board = await Board.findById(boardId);
+    if (!board) return res.status(404).json({ message: "Board not found" });
+
+    // board member check
+    const isMember =
+      board.createdBy.toString() === req.user._id.toString() ||
+      board.members.some(
+        (m) => m.user.toString() === req.user._id.toString()
+      );
+
+    if (!isMember) {
+      return res.status(403).json({ message: "Not a board member" });
+    }
+
+    const column = board.columns.id(columnId);
+    if (!column) return res.status(404).json({ message: "Column not found" });
+
+    const task = column.tasks.id(taskId);
+    if (!task) return res.status(404).json({ message: "Task not found" });
+
+    task.comments.push({
+      text,
+      user: req.user._id,
+    });
+
+    await board.save();
+
+    res.status(201).json({
+      message: "Comment added",
+      comments: task.comments,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to add comment",
+      error: error.message,
+    });
+  }
+};
+
+exports.editComment = async (req, res) => {
+  try {
+    const { boardId, columnId, taskId, commentId } = req.params;
+    const { text } = req.body;
+
+    const board = await Board.findById(boardId);
+    if (!board) return res.status(404).json({ message: "Board not found" });
+
+    const column = board.columns.id(columnId);
+    if (!column) return res.status(404).json({ message: "Column not found" });
+
+    const task = column.tasks.id(taskId);
+    if (!task) return res.status(404).json({ message: "Task not found" });
+
+    const comment = task.comments.id(commentId);
+    if (!comment)
+      return res.status(404).json({ message: "Comment not found" });
+
+    // only comment owner
+    if (comment.user.toString() !== req.user._id.toString()) {
+      return res
+        .status(403)
+        .json({ message: "Not allowed to edit this comment" });
+    }
+
+    comment.text = text;
+    await board.save();
+
+    res.json({ message: "Comment updated", comment });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to edit comment",
+      error: error.message,
+    });
+  }
+};
+
+exports.deleteComment = async (req, res) => {
+  try {
+    const { boardId, columnId, taskId, commentId } = req.params;
+
+    const board = await Board.findById(boardId);
+    if (!board) return res.status(404).json({ message: "Board not found" });
+
+    const column = board.columns.id(columnId);
+    if (!column) return res.status(404).json({ message: "Column not found" });
+
+    const task = column.tasks.id(taskId);
+    if (!task) return res.status(404).json({ message: "Task not found" });
+
+    const comment = task.comments.id(commentId);
+    if (!comment)
+      return res.status(404).json({ message: "Comment not found" });
+
+    if (comment.user.toString() !== req.user._id.toString()) {
+      return res
+        .status(403)
+        .json({ message: "Not allowed to delete this comment" });
+    }
+
+    task.comments = task.comments.filter(
+  (c) => c._id.toString() !== commentId
+);
+
+    await board.save();
+
+    res.json({ message: "Comment deleted" });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to delete comment",
       error: error.message,
     });
   }

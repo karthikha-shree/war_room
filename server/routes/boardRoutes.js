@@ -21,6 +21,13 @@ const {
     completeBoard,
     editTask,
     deleteTask,
+    reorderTasks,
+    assignTask,
+    renameColumn,
+    reorderColumns,
+    addComment,
+    editComment,
+    deleteComment,
 } = require("../controllers/boardController");
 
 // Create board
@@ -71,10 +78,31 @@ router.put("/:boardId/leave", protect, leaveBoard);
 // Mark board as completed
 router.put("/:boardId/complete", protect, completeBoard);
 
-// Edit a task within a column
-router.put(  "/:boardId/columns/:columnId/tasks/:taskId",  protect,  editTask);
-
 // DELETE a task within a column
 router.delete(  "/:boardId/columns/:columnId/tasks/:taskId",  protect,  deleteTask);
   
+// Reorder tasks within a column
+router.put(  "/:boardId/columns/:columnId/tasks/reorder",  protect,  reorderTasks);
+
+// Edit a task within a column
+router.put(  "/:boardId/columns/:columnId/tasks/:taskId",  protect,  editTask);
+
+// Assign a task to a user
+router.put(  "/:boardId/columns/:columnId/tasks/:taskId/assign",  protect,  assignTask);
+
+// Reorder columns within a board
+router.put(  "/:boardId/columns/reorder",  protect,  reorderColumns);
+
+// Rename a column within a board
+router.put(  "/:boardId/columns/:columnId",  protect,  renameColumn);
+
+//add comment to a task
+router.post("/:boardId/columns/:columnId/tasks/:taskId/comments", protect, addComment);
+
+//edit comment on a task
+router.put("/:boardId/columns/:columnId/tasks/:taskId/comments/:commentId", protect, editComment);
+
+//delete comment on a task
+router.delete("/:boardId/columns/:columnId/tasks/:taskId/comments/:commentId", protect, deleteComment);
+
 module.exports = router;
