@@ -28,7 +28,11 @@ const {
     addComment,
     editComment,
     deleteComment,
+    getBoardActivityLogs
 } = require("../controllers/boardController");
+
+// Get activity logs for a board
+router.get("/:boardId/activity", protect, getBoardActivityLogs);
 
 // Create board
 router.post("/", protect, createBoard);

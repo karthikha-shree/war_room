@@ -1,6 +1,41 @@
 const User = require("../models/User");
 const Board = require("../models/Board");
+const ActivityLog = require("../models/ActivityLog");
 const { isBoardMember } = require("../utils/boardPermissions");
+
+// GET ACTIVITY LOGS FOR A BOARD
+exports.getBoardActivityLogs = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const userId = req.user._id;
+
+    const board = await Board.findById(boardId);
+
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // 🔒 Permission check (member or owner)
+    const isMember =
+      board.createdBy.toString() === userId.toString() ||
+      board.members.some(
+        (m) => m.user.toString() === userId.toString()
+      );
+
+    if (!isMember) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    const logs = await ActivityLog.find({ board: boardId })
+      .populate("user", "name email")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json(logs);
+  } catch (error) {
+    console.error("GET ACTIVITY LOGS ERROR:", error);
+    res.status(500).json({ message: "Failed to fetch activity logs" });
+  }
+};
 
 // CREATE BOARD
 exports.createBoard = async (req, res) => {
@@ -29,8 +64,14 @@ exports.createBoard = async (req, res) => {
       ],
       columns: defaultColumns,
     });
-
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "BOARD_CREATED",
+      meta: { boardTitle: board.title, createdAt: board.createdAt, },
+    });
     res.status(201).json(board);
+
   } catch (error) {
     console.error("CREATE BOARD ERROR:", error);
     res.status(500).json({ message: "Failed to create board" });
@@ -70,15 +111,25 @@ exports.getBoardById = async (req, res) => {
     if (!board) {
       return res.status(404).json({ message: "Board not found" });
     }
+    
+    // 🔒 BLOCK if board was soft-deleted for this user
+    if (
+      board.deletedFor &&
+      board.deletedFor.some(
+        (id) => id.toString() === req.user._id.toString()
+      )
+    ) {
+      return res.status(403).json({ message: "Board removed for you" });
+    }
 
     // 🔐 BOARD ACCESS CHECK
     if (!isBoardMember(board, req.user._id)) {
-      return res.status(403).json({ message: "Access denied" });
+      return res.status(403).json({ message: "Access denied TO ACCESS BOARD" });
     }
 
     res.json(board);
   } catch (error) {
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Server error", err: error.stack });
   }
 };
 
@@ -119,11 +170,21 @@ exports.addTaskToColumn = async (req, res) => {
 
     column.tasks.push(newTask);
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "TASK_CREATED",
+      meta: {
+        taskTitle: newTask.title,
+        columnTitle: column.title,
+      },
+    });
 
     res.status(201).json({
       message: "Task added successfully",
       task: column.tasks[column.tasks.length - 1],
     });
+
   } catch (error) {
     res.status(500).json({
       message: "Failed to add task",
@@ -174,6 +235,14 @@ exports.createColumn = async (req, res) => {
     };
 
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "COLUMN_CREATED",
+      meta: {
+        columnTitle: newColumn.title,
+      },
+    });
 
     res.status(201).json({
       message: "Column created",
@@ -219,10 +288,19 @@ exports.deleteColumn = async (req, res) => {
     board.$locals = {
       user: req.user._id,
       action: "Deleted column",
-      meta: { columnId },
+      meta: { columnId, columnTitle: column.title },
     };
 
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "COLUMN_DELETED",
+      meta: {
+        columnId,
+        columnTitle: column.title,
+      },
+    });
 
     res.status(200).json({ message: "Column deleted successfully" });
   } catch (error) {
@@ -263,6 +341,9 @@ exports.moveTask = async (req, res) => {
       return res.status(404).json({ message: "Task not found" });
     }
 
+    // 📍 BEFORE move (save titles)
+    const fromColumnTitle = sourceColumn.title;
+    const toColumnTitle = destinationColumn.title;
     // 🧠 REMOVE from source
     sourceColumn.tasks = sourceColumn.tasks.filter(
       (t) => t._id.toString() !== taskId
@@ -272,6 +353,16 @@ exports.moveTask = async (req, res) => {
     destinationColumn.tasks.push(task);
 
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "TASK_MOVED",
+      meta: {
+        taskTitle: task.title,
+        from: fromColumnTitle,
+        to: toColumnTitle,
+      },
+    });
 
     res.status(200).json({
       message: "Task moved successfully",
@@ -327,6 +418,15 @@ exports.addMemberToBoard = async (req, res) => {
     });
 
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "MEMBER_ADDED",
+      meta: {
+        addedUser: userToAdd._id,
+        role: "member",
+      },
+    });
 
     res.status(200).json({
       message: "Member added successfully",
@@ -361,6 +461,13 @@ exports.softDeleteBoard = async (req, res) => {
 
     board.deletedFor.push(userId);
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "BOARD_SOFT_DELETED",
+      meta: { deletedFor: userId, },
+
+    });
 
     res.status(200).json({
       message: "Board removed from your view",
@@ -392,6 +499,12 @@ exports.permanentDeleteBoard = async (req, res) => {
     }
 
     await board.deleteOne();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "BOARD_DELETED_PERMANENT",
+      meta: { deletedFor: userId, },
+    });
 
     res.status(200).json({
       message: "Board permanently deleted",
@@ -439,6 +552,14 @@ exports.removeMemberFromBoard = async (req, res) => {
 
     board.members.splice(memberIndex, 1);
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "MEMBER_REMOVED",
+      meta: {
+        removedUser: userId,
+      },
+    });
 
     res.status(200).json({
       message: "Member removed successfully",
@@ -491,6 +612,15 @@ exports.changeMemberRole = async (req, res) => {
 
     member.role = role;
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "MEMBER_ROLE_CHANGED",
+      meta: {
+        targetUser: userId,
+        newRole: role,
+      },
+    });
 
     res.status(200).json({
       message: "Member role updated successfully",
@@ -537,6 +667,12 @@ exports.editBoard = async (req, res) => {
 
     board.title = title;
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "BOARD_EDITED",
+      meta: { newTitle: board.title },
+    });
 
     res.status(200).json({
       message: "Board updated successfully",
@@ -629,6 +765,14 @@ exports.leaveBoard = async (req, res) => {
 
     board.members.splice(memberIndex, 1);
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "MEMBER_LEFT",
+      meta: {
+        leftUser: userId,
+      },
+    });
 
     res.status(200).json({
       message: "You have left the board successfully",
@@ -667,6 +811,12 @@ exports.completeBoard = async (req, res) => {
 
     board.status = "completed";
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "BOARD_COMPLETED",
+      meta: { completedBy: userId, },
+    });
 
     res.status(200).json({
       message: "Board marked as completed",
@@ -726,6 +876,15 @@ exports.editTask = async (req, res) => {
     }
 
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "TASK_EDITED",
+      meta: {
+        taskId,
+        updatedFields: Object.keys(req.body),
+      },
+    });
 
     res.status(200).json({
       message: "Task updated successfully",
@@ -776,6 +935,10 @@ exports.deleteTask = async (req, res) => {
     if (!taskExists) {
       return res.status(404).json({ message: "Task not found" });
     }
+    const task = column.tasks.find(t => t._id.toString() === taskId);
+const taskTitle = task.title;
+const columnTitle = column.title;
+
 
     // ✅ Proper way to delete embedded task
     column.tasks = column.tasks.filter(
@@ -783,6 +946,15 @@ exports.deleteTask = async (req, res) => {
     );
 
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "TASK_DELETED",
+      meta: {
+        taskTitle,
+        columnTitle,
+      },
+    });
 
     res.status(200).json({
       message: "Task deleted successfully",
@@ -822,6 +994,14 @@ exports.reorderTasks = async (req, res) => {
     tasks.splice(destinationIndex, 0, movedTask);
 
     await board.save({ validateBeforeSave: false });// no validation triggered
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "TASK_REORDERED",
+      meta: {
+        columnTitle: column.title,
+      },
+    });
 
     res.json({ message: "Tasks reordered successfully", tasks });
   } catch (error) {
@@ -876,6 +1056,15 @@ exports.assignTask = async (req, res) => {
 
     task.assignedTo = userId;
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "TASK_ASSIGNED",
+      meta: {
+        taskTitle: task.title,
+        assignedTo: userId,
+      },
+    });
 
     res.json({ message: "Task assigned successfully", task });
   } catch (error) {
@@ -923,6 +1112,15 @@ exports.renameColumn = async (req, res) => {
 
     column.title = title;
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "COLUMN_RENAMED",
+      meta: {
+        columnId,
+        newTitle: title,
+      },
+    });
 
     res.json({
       message: "Column renamed successfully",
@@ -980,6 +1178,12 @@ exports.reorderColumns = async (req, res) => {
     });
 
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "COLUMNS_REORDERED",
+    });
+
 
     res.json({
       message: "Columns reordered successfully",
@@ -1028,6 +1232,15 @@ exports.addComment = async (req, res) => {
     });
 
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "COMMENT_ADDED",
+      meta: {
+        taskId,
+        commentText: text,
+      },
+    });
 
     res.status(201).json({
       message: "Comment added",
@@ -1068,6 +1281,15 @@ exports.editComment = async (req, res) => {
 
     comment.text = text;
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "COMMENT_EDITED",
+      meta: {
+        taskId,
+        commentId,
+      },
+    });
 
     res.json({ message: "Comment updated", comment });
   } catch (error) {
@@ -1102,10 +1324,19 @@ exports.deleteComment = async (req, res) => {
     }
 
     task.comments = task.comments.filter(
-  (c) => c._id.toString() !== commentId
-);
+      (c) => c._id.toString() !== commentId
+    );
 
     await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "COMMENT_DELETED",
+      meta: {
+        taskId,
+        commentId,
+      },
+    });
 
     res.json({ message: "Comment deleted" });
   } catch (error) {
@@ -1115,3 +1346,4 @@ exports.deleteComment = async (req, res) => {
     });
   }
 };
+
