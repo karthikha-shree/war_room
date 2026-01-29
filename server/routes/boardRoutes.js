@@ -28,7 +28,8 @@ const {
     addComment,
     editComment,
     deleteComment,
-    getBoardActivityLogs
+    getBoardActivityLogs,
+    getBoardChat,
 } = require("../controllers/boardController");
 
 // Get activity logs for a board
@@ -42,6 +43,9 @@ router.get("/", protect, getMyBoards);
 
 // Get single board (permission check inside controller)
 router.get("/:id", protect, getBoardById);
+
+// Get chat messages for a board    
+router.get("/:boardId/chat", protect, getBoardChat);
 
 // Move task between columns
 router.put("/:boardId/tasks/move", protect, moveTask);
