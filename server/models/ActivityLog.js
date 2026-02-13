@@ -39,12 +39,19 @@ const activityLogSchema = new mongoose.Schema(
         // MEMBERS
         "MEMBER_ADDED",
         "MEMBER_REMOVED",
+        "MEMBER_LEFT",
         "MEMBER_ROLE_CHANGED",
+        "MEMBER_INVITED",
+        "INVITATION_CANCELLED",
 
         // BOARD
         "BOARD_CREATED",
         "BOARD_UPDATED",
         "BOARD_COMPLETED",
+        "BOARD_RESTORED",
+        "BOARD_DELETED_PERMANENT",
+        "BOARD_SOFT_DELETED",
+        "BOARD_SOFT_DELETE_RESTORED",
       ],
     },
 

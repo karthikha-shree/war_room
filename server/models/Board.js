@@ -107,6 +107,10 @@ const taskSchema = new mongoose.Schema({
     ref: "User",
     default: null,
   },
+  assignedMembers: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+  }],
   comments: [commentSchema],
 });
 
@@ -115,7 +119,11 @@ const columnSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  order: Number,
+  order: {
+    type: Number,
+    required: true,
+    default: 0,
+  },
   tasks: [taskSchema],
 });
 
@@ -137,34 +145,36 @@ const boardSchema = new mongoose.Schema(
         user: {
           type: mongoose.Schema.Types.ObjectId,
           ref: "User",
+          required: true,
         },
         role: {
           type: String,
-          enum: ["admin", "member"],
-          default: "member",
-        },
-      },
-    ],
-    
-    members: [
-      {
-        user: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "User",
-        },
-        role: {
-          type: String,
-          enum: ["admin", "member"],
+          enum: ["owner", "admin", "member"],
           default: "member",
         },
       },
     ],
 
+    invitedMembers: [
+      {
+        email: String,
+        role: {
+          type: String,
+          enum: ["admin", "member"],
+          default: "member",
+        },
+        invitedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+
     status: {
-  type: String,
-  enum: ["active", "completed"],
-  default: "active",
-},
+      type: String,
+      enum: ["active", "completed"],
+      default: "active",
+    },
 
     deletedFor: [
       {

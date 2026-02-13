@@ -4,6 +4,7 @@ const Board = require("../models/Board");
 const ActivityLog = require("../models/ActivityLog");
 const { isBoardMember } = require("../utils/boardPermissions");
 const { getIO } = require("../socket");
+const sendEmail = require("../utils/sendEmail");
 
 
 // GET CHAT MESSAGES FOR A BOARD
@@ -90,7 +91,7 @@ exports.createBoard = async (req, res) => {
       members: [
         {
           user: req.user._id,
-          role: "admin",
+          role: "owner",
         },
       ],
       columns: defaultColumns,
@@ -142,7 +143,10 @@ exports.getBoardById = async (req, res) => {
   try {
     const board = await Board.findById(req.params.id)
       .populate("createdBy", "name email")
-      .populate("members.user", "name email");
+      .populate("members.user", "name email")
+      .populate("columns.tasks.assignedTo", "name email")
+      .populate("columns.tasks.assignedMembers", "name email")
+      .populate("columns.tasks.comments.user", "name email");
 
     if (!board) {
       return res.status(404).json({ message: "Board not found" });
@@ -163,9 +167,498 @@ exports.getBoardById = async (req, res) => {
       return res.status(403).json({ message: "Access denied TO ACCESS BOARD" });
     }
 
+    // Sort columns by order ascending
+    if (board.columns && board.columns.length > 0) {
+      board.columns.sort((a, b) => a.order - b.order);
+    }
+
     res.json(board);
   } catch (error) {
     res.status(500).json({ message: "Server error", err: error.stack });
+  }
+};
+
+
+// ADD MEMBER TO BOARD
+exports.addMemberToBoard = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const { email, role } = req.body;
+
+    console.log("\n========================================");
+    console.log("🔷 ADD MEMBER REQUEST RECEIVED");
+    console.log("========================================");
+    console.log("📋 Board ID:", boardId);
+    console.log("📧 Email to add:", email);
+    console.log("👤 Role:", role);
+    console.log("👮 Requester ID:", req.user._id);
+    console.log("========================================\n");
+
+    // Validate input
+    if (!email || !role) {
+      return res.status(400).json({ message: "Email and role are required" });
+    }
+
+    // Validate role
+    if (!['admin', 'member'].includes(role)) {
+      return res.status(400).json({ message: "Role must be either 'admin' or 'member'" });
+    }
+
+    // Find board
+    const board = await Board.findById(boardId).populate("members.user", "name email");
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // Check if requester is owner or admin
+    const requesterMember = board.members.find(
+      (m) => m.user._id.toString() === req.user._id.toString()
+    );
+
+    if (!requesterMember || !['owner', 'admin'].includes(requesterMember.role)) {
+      return res.status(403).json({ message: "Only board owners and admins can add members" });
+    }
+
+    // Find user by email
+    const user = await User.findOne({ email: email.toLowerCase() });
+
+    console.log(`🔍 Searching for user with email: ${email}`);
+    console.log(`🔍 User found: ${user ? 'YES (will add directly)' : 'NO (will send invitation email)'}`);
+
+    if (user) {
+      // User exists - add to members
+      
+      console.log(`✅ User ${email} exists in database - adding directly to board`);
+      
+      // Check if user is already a member
+      const isAlreadyMember = board.members.some(
+        (m) => m.user._id.toString() === user._id.toString()
+      );
+
+      if (isAlreadyMember) {
+        return res.status(400).json({ message: "User already a member" });
+      }
+
+      // Add user to members
+      board.members.push({
+        user: user._id,
+        role: role,
+      });
+
+      await board.save();
+
+      // Populate and return updated board
+      const updatedBoard = await Board.findById(boardId)
+        .populate("createdBy", "name email")
+        .populate("members.user", "name email");
+
+      // Log activity
+      await ActivityLog.create({
+        board: board._id,
+        user: req.user._id,
+        action: "MEMBER_ADDED",
+        meta: { memberEmail: email, role: role },
+      });
+
+      console.log(`✅ User ${email} successfully added to board`);
+      res.status(200).json({
+        ...updatedBoard.toObject(),
+        message: `${user.name} added to board successfully`,
+        details: `${user.name} (${email}) has been added to the board as a ${role}.`
+      });
+    } else {
+      // User does not exist - add to invitedMembers
+      
+      console.log(`📧 User ${email} NOT found - will send invitation email`);
+      
+      // Check if email is already invited
+      const isAlreadyInvited = board.invitedMembers.some(
+        (invite) => invite.email.toLowerCase() === email.toLowerCase()
+      );
+
+      if (isAlreadyInvited) {
+        return res.status(400).json({ message: "User is already invited to this board" });
+      }
+
+      // Add to invitedMembers
+      board.invitedMembers.push({
+        email: email.toLowerCase(),
+        role: role,
+        invitedAt: new Date(),
+      });
+
+      await board.save();
+
+      // Send invitation email
+      const registerLink = `${process.env.CLIENT_URL || 'http://localhost:5173'}/register?invite=${encodeURIComponent(email)}&board=${boardId}`;
+      
+      console.log(`📧 Attempting to send invitation email to: ${email}`);
+      console.log(`📧 Register link: ${registerLink}`);
+      console.log(`📧 Email config check - MAIL_HOST: ${process.env.MAIL_HOST}`);
+      console.log(`📧 Email config check - MAIL_USER: ${process.env.MAIL_USER}`);
+      
+      try {
+        console.log("📧 Step 1: Calling sendEmail function...");
+        const emailResult = await sendEmail({
+          to: email,
+          subject: `You're invited to War Room - ${board.title}`,
+          text: `Hello!\n\nYou've been invited to join the board "${board.title}" on War Room as a ${role}.\n\nWar Room is currently invite-only. Please register using the link below to accept this invitation:\n\n${registerLink}\n\nAfter registering, you'll automatically be added to the board.\n\nBest regards,\nWar Room Team`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <h2 style="color: #1e40af;">You're invited to War Room!</h2>
+              <p>Hello!</p>
+              <p>You've been invited to join the board "<strong>${board.title}</strong>" as a <strong>${role}</strong>.</p>
+              <p><strong>War Room</strong> is currently invite-only. Please register to accept this invitation and start collaborating!</p>
+              <div style="margin: 30px 0; text-align: center;">
+                <a href="${registerLink}" 
+                   style="display: inline-block; 
+                          padding: 12px 30px; 
+                          background-color: #2563eb; 
+                          color: white; 
+                          text-decoration: none; 
+                          border-radius: 8px;
+                          font-weight: bold;">
+                  Register & Join Board
+                </a>
+              </div>
+              <p style="color: #666; font-size: 14px;">Or copy this link: <br><code>${registerLink}</code></p>
+              <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
+              <p style="color: #666; font-size: 12px;">After registering, you'll automatically be added to the board and can start managing tasks!</p>
+            </div>
+          `,
+        });
+        console.log(`✅ SUCCESS! Invitation email sent to ${email}`);
+        console.log(`✅ Email message ID: ${emailResult?.messageId}`);
+      } catch (emailError) {
+        console.error(`\n❌❌❌ CRITICAL ERROR SENDING EMAIL ❌❌❌`);
+        console.error(`❌ Failed to send invitation email to: ${email}`);
+        console.error(`❌ Error name:`, emailError.name);
+        console.error(`❌ Error message:`, emailError.message);
+        console.error(`❌ Error code:`, emailError.code);
+        console.error(`❌ Full error object:`, JSON.stringify(emailError, null, 2));
+        console.error(`❌ Stack trace:`, emailError.stack);
+        console.error(`❌❌❌ END ERROR DETAILS ❌❌❌\n`);
+        
+        // Return error to frontend so user knows email failed
+        return res.status(500).json({ 
+          message: "Failed to send invitation email",
+          error: emailError.message,
+          details: `The user was added to invited list, but the email could not be sent. Error: ${emailError.message}`
+        });
+      }
+
+      // Log activity
+      await ActivityLog.create({
+        board: board._id,
+        user: req.user._id,
+        action: "MEMBER_INVITED",
+        meta: { invitedEmail: email, role: role },
+      });
+
+      res.status(200).json({ 
+        message: "Invitation email sent", 
+        details: `An invitation has been sent to ${email}. They will be added to the board once they register.`
+      });
+    }
+  } catch (error) {
+    console.error("ADD MEMBER ERROR:", error);
+    res.status(500).json({ message: "Failed to add member", error: error.message });
+  }
+};
+
+
+// CHANGE MEMBER ROLE
+exports.changeMemberRole = async (req, res) => {
+  try {
+    const { boardId, userId } = req.params;
+    const { role } = req.body;
+
+    // Validate input
+    if (!userId || !role) {
+      return res.status(400).json({ message: "userId and role are required" });
+    }
+
+    // Validate role
+    if (!['owner', 'admin', 'member'].includes(role)) {
+      return res.status(400).json({ message: "Role must be 'owner', 'admin', or 'member'" });
+    }
+
+    // Find board
+    const board = await Board.findById(boardId).populate("members.user", "name email");
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // Check if requester is owner
+    const requesterMember = board.members.find(
+      (m) => m.user._id.toString() === req.user._id.toString()
+    );
+
+    if (!requesterMember || requesterMember.role !== 'owner') {
+      return res.status(403).json({ message: "Only board owner can change member roles" });
+    }
+
+    // Find the member to update
+    const memberToUpdate = board.members.find(
+      (m) => m.user._id.toString() === userId.toString()
+    );
+
+    if (!memberToUpdate) {
+      return res.status(404).json({ message: "Member not found in this board" });
+    }
+
+    // Cannot change owner role
+    if (memberToUpdate.role === 'owner') {
+      return res.status(403).json({ message: "Cannot change owner role" });
+    }
+
+    // Update the role
+    memberToUpdate.role = role;
+    await board.save();
+
+    // Populate and return updated board
+    const updatedBoard = await Board.findById(boardId)
+      .populate("createdBy", "name email")
+      .populate("members.user", "name email");
+
+    // Log activity
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "MEMBER_ROLE_CHANGED",
+      meta: { 
+        memberId: userId, 
+        memberEmail: memberToUpdate.user.email,
+        newRole: role 
+      },
+    });
+
+    res.status(200).json(updatedBoard);
+  } catch (error) {
+    console.error("CHANGE MEMBER ROLE ERROR:", error);
+    res.status(500).json({ message: "Failed to change member role", error: error.message });
+  }
+};
+
+
+// REMOVE MEMBER
+exports.removeMember = async (req, res) => {
+  try {
+    const { boardId, userId } = req.params;
+
+    // Validate input
+    if (!userId) {
+      return res.status(400).json({ message: "userId is required" });
+    }
+
+    // Find board
+    const board = await Board.findById(boardId).populate("members.user", "name email");
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // Find requester member
+    const requesterMember = board.members.find(
+      (m) => m.user._id.toString() === req.user._id.toString()
+    );
+
+    if (!requesterMember) {
+      return res.status(403).json({ message: "You are not a member of this board" });
+    }
+
+    // Find the member to remove
+    const memberToRemove = board.members.find(
+      (m) => m.user._id.toString() === userId.toString()
+    );
+
+    if (!memberToRemove) {
+      return res.status(404).json({ message: "Member not found in this board" });
+    }
+
+    // Cannot remove owner
+    if (memberToRemove.role === 'owner') {
+      return res.status(403).json({ message: "Cannot remove board owner" });
+    }
+
+    // Check permissions
+    if (requesterMember.role === 'owner') {
+      // Owner can remove admin or member
+      if (!['admin', 'member'].includes(memberToRemove.role)) {
+        return res.status(403).json({ message: "Invalid operation" });
+      }
+    } else if (requesterMember.role === 'admin') {
+      // Admin can only remove member
+      if (memberToRemove.role !== 'member') {
+        return res.status(403).json({ message: "Admins can only remove members" });
+      }
+    } else {
+      // Members cannot remove anyone
+      return res.status(403).json({ message: "You do not have permission to remove members" });
+    }
+
+    // Remove member from array
+    board.members = board.members.filter(
+      (m) => m.user._id.toString() !== userId.toString()
+    );
+
+    await board.save();
+
+    // Populate and return updated board
+    const updatedBoard = await Board.findById(boardId)
+      .populate("createdBy", "name email")
+      .populate("members.user", "name email");
+
+    // Log activity
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "MEMBER_REMOVED",
+      meta: { 
+        memberId: userId,
+        memberEmail: memberToRemove.user.email,
+        memberRole: memberToRemove.role
+      },
+    });
+
+    res.status(200).json(updatedBoard);
+  } catch (error) {
+    console.error("REMOVE MEMBER ERROR:", error);
+    res.status(500).json({ message: "Failed to remove member", error: error.message });
+  }
+};
+
+
+// LEAVE BOARD
+exports.leaveBoard = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const userId = req.user._id;
+
+    // Find board
+    const board = await Board.findById(boardId).populate("members.user", "name email");
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // Find the user's membership
+    const userMember = board.members.find(
+      (m) => m.user._id.toString() === userId.toString()
+    );
+
+    if (!userMember) {
+      return res.status(404).json({ message: "You are not a member of this board" });
+    }
+
+    // Check if user is owner
+    if (userMember.role === 'owner') {
+      // Count how many owners exist
+      const ownerCount = board.members.filter((m) => m.role === 'owner').length;
+      
+      if (ownerCount === 1) {
+        return res.status(403).json({ 
+          message: "Cannot leave board. You are the only owner. Please assign another owner first or delete the board." 
+        });
+      }
+    }
+
+    // Remove user from members
+    board.members = board.members.filter(
+      (m) => m.user._id.toString() !== userId.toString()
+    );
+
+    await board.save();
+
+    // Log activity
+    await ActivityLog.create({
+      board: board._id,
+      user: userId,
+      action: "MEMBER_LEFT",
+      meta: { 
+        userEmail: userMember.user.email,
+        userRole: userMember.role
+      },
+    });
+
+    res.status(200).json({ message: "Successfully left the board" });
+  } catch (error) {
+    console.error("LEAVE BOARD ERROR:", error);
+    res.status(500).json({ message: "Failed to leave board", error: error.message });
+  }
+};
+
+
+// CANCEL INVITATION
+// DELETE /boards/:boardId/invitations
+exports.cancelInvitation = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const { email } = req.body;
+    const userId = req.user._id;
+
+    // Validate email
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    // Find the board
+    const board = await Board.findById(boardId).populate("members.user");
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // Check if user is a member
+    const currentUserMember = board.members.find(
+      (m) => m.user._id.toString() === userId.toString()
+    );
+
+    if (!currentUserMember) {
+      return res.status(403).json({ message: "You are not a member of this board" });
+    }
+
+    // Only owner and admin can cancel invitations
+    if (currentUserMember.role !== "owner" && currentUserMember.role !== "admin") {
+      return res.status(403).json({ 
+        message: "Only owners and admins can cancel invitations" 
+      });
+    }
+
+    // Find the invitation
+    const invitationIndex = board.invitedMembers.findIndex(
+      (inv) => inv.email.toLowerCase() === email.toLowerCase()
+    );
+
+    if (invitationIndex === -1) {
+      return res.status(404).json({ 
+        message: "Invitation not found" 
+      });
+    }
+
+    // Remove the invitation
+    const removedInvitation = board.invitedMembers[invitationIndex];
+    board.invitedMembers.splice(invitationIndex, 1);
+    await board.save();
+
+    // Log activity
+    await ActivityLog.create({
+      board: board._id,
+      user: userId,
+      action: "INVITATION_CANCELLED",
+      meta: { 
+        cancelledEmail: email,
+        invitedRole: removedInvitation.role
+      },
+    });
+
+    res.status(200).json({ 
+      message: "Invitation cancelled successfully",
+      email: email
+    });
+  } catch (error) {
+    console.error("CANCEL INVITATION ERROR:", error);
+    res.status(500).json({ 
+      message: "Failed to cancel invitation", 
+      error: error.message 
+    });
   }
 };
 
@@ -216,14 +709,14 @@ exports.addTaskToColumn = async (req, res) => {
       },
     });
 
-    const io = getIO();
-    const createdTask = column.tasks[column.tasks.length - 1];
-
-    io.to(board._id.toString()).emit("task:created", {
-      boardId: board._id,
-      columnId: column._id,
-      task: createdTask,
-    });
+    // Socket event removed - frontend updates locally
+    // const io = getIO();
+    // const createdTask = column.tasks[column.tasks.length - 1];
+    // io.to(board._id.toString()).emit("task:created", {
+    //   boardId: board._id,
+    //   columnId: column._id,
+    //   task: createdTask,
+    // });
 
     res.status(201).json({
       message: "Task added successfully",
@@ -291,15 +784,17 @@ exports.createColumn = async (req, res) => {
         columnTitle: newColumn.title,
       },
     });
-    const io = getIO();
-    io.to(board._id.toString()).emit("column:created", {
-      boardId: board._id,
-      column: board.columns[board.columns.length - 1],
-    });
+    
+    // Socket event removed - frontend updates locally
+    // const io = getIO();
+    // io.to(board._id.toString()).emit("column:created", {
+    //   boardId: board._id,
+    //   column: board.columns[board.columns.length - 1],
+    // });
 
     res.status(201).json({
       message: "Column created",
-      column: board.columns[board.columns.length - 1],
+      board: board,
     });
   } catch (error) {
     res.status(500).json({
@@ -338,13 +833,10 @@ exports.deleteColumn = async (req, res) => {
       return res.status(404).json({ message: "Column not found" });
     }
 
-    column.remove();
+    const columnTitle = column.title;
 
-    board.$locals = {
-      user: req.user._id,
-      action: "Deleted column",
-      meta: { columnId, columnTitle: column.title },
-    };
+    // Use pull instead of remove
+    board.columns.pull(columnId);
 
     await board.save();
     await ActivityLog.create({
@@ -353,15 +845,16 @@ exports.deleteColumn = async (req, res) => {
       action: "COLUMN_DELETED",
       meta: {
         columnId,
-        columnTitle: column.title,
+        columnTitle: columnTitle,
       },
     });
 
-    const io = getIO();
-    io.to(board._id.toString()).emit("column:deleted", {
-      boardId: board._id,
-      columnId,
-    });
+    // Socket event removed - frontend updates locally
+    // const io = getIO();
+    // io.to(board._id.toString()).emit("column:deleted", {
+    //   boardId: board._id,
+    //   columnId,
+    // });
 
     res.status(200).json({ message: "Column deleted successfully" });
   } catch (error) {
@@ -447,83 +940,6 @@ exports.moveTask = async (req, res) => {
 };
 
 
-// ADD MEMBER (OWNER ONLY)
-exports.addMemberToBoard = async (req, res) => {
-  try {
-    const { boardId } = req.params;
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ message: "Email is required" });
-    }
-
-    const board = await Board.findById(boardId);
-    if (!board) {
-      return res.status(404).json({ message: "Board not found" });
-    }
-
-    // 🔒 Only owner can add members
-    if (board.createdBy.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: "Only owner can add members" });
-    }
-
-    const userToAdd = await User.findOne({ email });
-    if (!userToAdd) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    // ❌ Prevent duplicate member
-    const alreadyMember =
-      board.createdBy.toString() === userToAdd._id.toString() ||
-      board.members.some(
-        (m) => m.user.toString() === userToAdd._id.toString()
-      );
-
-    if (alreadyMember) {
-      return res.status(400).json({ message: "User already in board" });
-    }
-
-    board.members.push({
-      user: userToAdd._id,
-      role: "member",
-    });
-
-    await board.save();
-    await ActivityLog.create({
-      board: board._id,
-      user: req.user._id,
-      action: "MEMBER_ADDED",
-      meta: {
-        addedUser: userToAdd._id,
-        role: "member",
-      },
-    });
-    const io = getIO();
-    io.to(board._id.toString()).emit("member:added", {
-      boardId: board._id,
-      member: {
-        id: userToAdd._id,
-        email: userToAdd.email,
-        name: userToAdd.name,
-      },
-    });
-    res.status(200).json({
-      message: "Member added successfully",
-      member: {
-        id: userToAdd._id,
-        email: userToAdd.email,
-        name: userToAdd.name,
-      },
-    });
-  } catch (error) {
-    res.status(500).json({
-      message: "Failed to add member",
-      error: error.message,
-    });
-  }
-};
-
-
 // SOFT DELETE BOARD (DELETE FOR ME)
 exports.softDeleteBoard = async (req, res) => {
   try {
@@ -566,6 +982,60 @@ exports.softDeleteBoard = async (req, res) => {
   }
 };
 
+// RESTORE SOFT DELETED BOARD (REMOVE USER FROM DELETEFOR ARRAY)
+exports.restoreSoftDeletedBoard = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const userId = req.user._id;
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // Check if user has access to this board (is member or owner)
+    const isOwner = board.createdBy.toString() === userId.toString();
+    const isMember = board.members.some(
+      (m) => m.user.toString() === userId.toString()
+    );
+
+    if (!isOwner && !isMember) {
+      return res.status(403).json({ message: "You don't have access to this board" });
+    }
+
+    // Check if board is actually soft deleted for this user
+    if (!board.deletedFor.includes(userId)) {
+      return res.status(400).json({ message: "Board is not deleted for you" });
+    }
+
+    // Remove user from deletedFor array
+    board.deletedFor = board.deletedFor.filter(
+      (id) => id.toString() !== userId.toString()
+    );
+    await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "BOARD_SOFT_DELETE_RESTORED",
+      meta: { restoredFor: userId, },
+    });
+
+    const io = getIO();
+    io.to(board._id.toString()).emit("board:softDeleteRestored", {
+      boardId,
+      userId,
+    });
+
+    res.status(200).json({
+      message: "Board restored to your view",
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to restore board",
+      error: error.message,
+    });
+  }
+};
 
 // PERMANENT DELETE BOARD (OWNER ONLY)
 exports.permanentDeleteBoard = async (req, res) => {
@@ -584,19 +1054,18 @@ exports.permanentDeleteBoard = async (req, res) => {
         .status(403)
         .json({ message: "Only owner can permanently delete the board" });
     }
-await ActivityLog.create({
+
+    // Create activity log before deletion
+    await ActivityLog.create({
       board: board._id,
       user: req.user._id,
       action: "BOARD_DELETED_PERMANENT",
       meta: { deletedFor: userId, },
     });
+
+    // Delete the board
     await board.deleteOne();
-    // await ActivityLog.create({
-    //   board: board._id,
-    //   user: req.user._id,
-    //   action: "BOARD_DELETED_PERMANENT",
-    //   meta: { deletedFor: userId, },
-    // });
+
     const io = getIO();
     io.emit("board:permanentlyDeleted", { boardId: board._id });
 
@@ -604,6 +1073,7 @@ await ActivityLog.create({
       message: "Board permanently deleted",
     });
   } catch (error) {
+    console.error("Error in permanentDeleteBoard:", error);
     res.status(500).json({
       message: "Failed to permanently delete board",
       error: error.message,
@@ -623,11 +1093,24 @@ exports.removeMemberFromBoard = async (req, res) => {
       return res.status(404).json({ message: "Board not found" });
     }
 
-    // 🔒 Only owner can remove members
-    if (board.createdBy.toString() !== currentUserId.toString()) {
+    // 🔒 Only owner or admin can remove members
+    const isOwner = board.createdBy.toString() === currentUserId.toString();
+    const isAdmin = board.members.some(
+      (m) => m.user.toString() === currentUserId.toString() && m.role === "admin"
+    );
+
+    if (!isOwner && !isAdmin) {
       return res
         .status(403)
-        .json({ message: "Only owner can remove members" });
+        .json({ message: "Only owner or admin can remove members" });
+    }
+
+    // 🔒 Admins cannot remove other admins or owner
+    if (isAdmin && !isOwner) {
+      const targetMember = board.members.find((m) => m.user.toString() === userId);
+      if (targetMember && targetMember.role === "admin") {
+        return res.status(403).json({ message: "Admins cannot remove other admins" });
+      }
     }
 
     // 🔒 Owner cannot be removed
@@ -749,42 +1232,69 @@ exports.editBoard = async (req, res) => {
     const { title } = req.body;
     const userId = req.user._id;
 
+    console.log("\n========================================");
+    console.log("📝 EDIT BOARD REQUEST RECEIVED");
+    console.log("========================================");
+    console.log("📋 Board ID:", boardId);
+    console.log("✏️ New Title:", title);
+    console.log("👤 User ID:", userId);
+    console.log("========================================\n");
+
     if (!title || title.trim() === "") {
+      console.log("❌ Error: Board title is empty");
       return res.status(400).json({ message: "Board title is required" });
     }
 
     const board = await Board.findById(boardId);
     if (!board) {
+      console.log("❌ Error: Board not found");
       return res.status(404).json({ message: "Board not found" });
     }
 
+    console.log("✅ Board found:", board.title);
+
     const isOwner = board.createdBy.toString() === userId.toString();
+    console.log("👑 Is Owner:", isOwner);
 
     const isAdmin = board.members.some(
       (m) =>
         m.user.toString() === userId.toString() &&
         m.role === "admin"
     );
+    console.log("🔐 Is Admin:", isAdmin);
 
     if (!isOwner && !isAdmin) {
+      console.log("❌ Error: User is not owner or admin");
       return res
         .status(403)
         .json({ message: "Only owner or admin can edit board" });
     }
 
+    console.log("✅ User has permission to edit");
+
     board.title = title;
     await board.save();
+    
+    console.log("✅ Board title updated successfully");
+
     await ActivityLog.create({
       board: board._id,
       user: req.user._id,
-      action: "BOARD_EDITED",
+      action: "BOARD_UPDATED",
       meta: { newTitle: board.title },
     });
-    const io = getIO();
-    io.to(board._id.toString()).emit("board:edited", {
-      boardId: board._id,
-      title: board.title,
-    });
+    
+    console.log("✅ Activity log created");
+
+    // Socket event removed - frontend updates locally
+    // const io = getIO();
+    // io.to(board._id.toString()).emit("board:edited", {
+    //   boardId: board._id,
+    //   title: board.title,
+    // });
+
+    console.log("✅ Responding to client");
+    console.log("========================================\n");
 
     res.status(200).json({
       message: "Board updated successfully",
@@ -792,6 +1302,11 @@ exports.editBoard = async (req, res) => {
       title: board.title,
     });
   } catch (error) {
+    console.error("\n❌❌❌ EDIT BOARD ERROR ❌❌❌");
+    console.error("Error message:", error.message);
+    console.error("Error stack:", error.stack);
+    console.error("❌❌❌ END ERROR ❌❌❌\n");
+    
     res.status(500).json({
       message: "Failed to edit board",
       error: error.message,
@@ -955,12 +1470,63 @@ exports.completeBoard = async (req, res) => {
   }
 };
 
+// RESTORE BOARD (CHANGE STATUS FROM COMPLETED BACK TO ACTIVE)
+exports.restoreBoard = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const userId = req.user._id;
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    const isOwner = board.createdBy.toString() === userId.toString();
+    const isAdmin = board.members.some(
+      (m) =>
+        m.user.toString() === userId.toString() &&
+        m.role === "admin"
+    );
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({
+        message: "Only owner or admin can restore the board",
+      });
+    }
+
+    board.status = "active";
+    await board.save();
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "BOARD_RESTORED",
+      meta: { restoredBy: userId, },
+    });
+
+    const io = getIO();
+    io.to(board._id.toString()).emit("board:restored", {
+      boardId: board._id,
+      status: board.status,
+    });
+
+    res.status(200).json({
+      message: "Board restored to active status",
+      status: board.status,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to restore board",
+      error: error.message,
+    });
+  }
+};
+
 
 // EDIT TASK (ANY BOARD MEMBER)
 exports.editTask = async (req, res) => {
   try {
     const { boardId, columnId, taskId } = req.params;
-    const { title, description } = req.body;
+    const { title, description, assignedMembers } = req.body;
     const userId = req.user._id;
 
     if (!title || title.trim() === "") {
@@ -1000,12 +1566,22 @@ exports.editTask = async (req, res) => {
     if (description !== undefined) {
       task.description = description;
     }
+    if (assignedMembers !== undefined) {
+      task.assignedMembers = assignedMembers;
+    }
 
     await board.save();
+    
+    // Populate task with user data for assigned members
+    await Board.populate(board, {
+      path: 'columns.tasks.assignedMembers',
+      select: 'name email'
+    });
+    
     await ActivityLog.create({
       board: board._id,
       user: req.user._id,
-      action: "TASK_EDITED",
+      action: "TASK_UPDATED",
       meta: {
         taskId,
         updatedFields: Object.keys(req.body),
@@ -1275,11 +1851,13 @@ exports.renameColumn = async (req, res) => {
       },
     });
 
-    const io = getIO();
-    io.to(board._id.toString()).emit("column:renamed", {
-      boardId: board._id,
-      column,
-    });
+    // Socket event removed - frontend updates locally
+    // const io = getIO();
+    // io.to(board._id.toString()).emit("column:renamed", {
+    //   boardId: board._id,
+    //   column,
+    // });
+    
     res.json({
       message: "Column renamed successfully",
       column,
@@ -1295,61 +1873,53 @@ exports.renameColumn = async (req, res) => {
 exports.reorderColumns = async (req, res) => {
   try {
     const { boardId } = req.params;
-    const { sourceIndex, destinationIndex } = req.body;
+    const { lists } = req.body;
+
+    if (!lists || !Array.isArray(lists)) {
+      return res.status(400).json({ message: "Lists array is required" });
+    }
 
     const board = await Board.findById(boardId);
     if (!board) {
       return res.status(404).json({ message: "Board not found" });
     }
 
-    // permission: owner or admin
-    const isOwner =
-      board.createdBy.toString() === req.user._id.toString();
-
-    const isAdmin = board.members.some(
-      (m) =>
-        m.user.toString() === req.user._id.toString() &&
-        m.role === "admin"
+    // permission: owner, admin, or member
+    const isOwner = board.createdBy.toString() === req.user._id.toString();
+    const memberInfo = board.members.find(
+      (m) => m.user.toString() === req.user._id.toString()
     );
+    const isAdmin = memberInfo && memberInfo.role === "admin";
+    const isMember = memberInfo && memberInfo.role === "member";
 
-    if (!isOwner && !isAdmin) {
+    if (!isOwner && !isAdmin && !isMember) {
       return res
         .status(403)
         .json({ message: "Not allowed to reorder columns" });
     }
 
-    if (
-      sourceIndex < 0 ||
-      destinationIndex < 0 ||
-      sourceIndex >= board.columns.length ||
-      destinationIndex >= board.columns.length
-    ) {
-      return res.status(400).json({ message: "Invalid indexes" });
-    }
-
-    const [movedColumn] = board.columns.splice(sourceIndex, 1);
-    board.columns.splice(destinationIndex, 0, movedColumn);
-
-    // recalculate order
-    board.columns.forEach((col, index) => {
-      col.order = index + 1;
+    // Update order for each column
+    lists.forEach((item) => {
+      const column = board.columns.id(item._id);
+      if (column) {
+        column.order = item.order;
+      }
     });
 
     await board.save();
+    
     await ActivityLog.create({
       board: board._id,
       user: req.user._id,
-      action: "COLUMNS_REORDERED",
+      action: "COLUMN_REORDERED",
     });
-    const io = getIO();
-    io.to(board._id.toString()).emit("columns:reordered", {
-      boardId: board._id,
-      columns: board.columns,
-    });
+
+    // Sort columns by order ascending
+    board.columns.sort((a, b) => a.order - b.order);
 
     res.json({
       message: "Columns reordered successfully",
-      columns: board.columns,
+      board: board,
     });
   } catch (error) {
     res.status(500).json({
@@ -1394,6 +1964,15 @@ exports.addComment = async (req, res) => {
     });
 
     await board.save();
+    
+    // Populate the newly added comment with user data
+    await Board.populate(board, {
+      path: 'columns.tasks.comments.user',
+      select: 'name email'
+    });
+    
+    const newComment = task.comments[task.comments.length - 1];
+    
     await ActivityLog.create({
       board: board._id,
       user: req.user._id,
@@ -1408,7 +1987,7 @@ exports.addComment = async (req, res) => {
       boardId: board._id,
       columnId: column._id,
       taskId,
-      comment: task.comments[task.comments.length - 1],
+      comment: newComment,
     });
     res.status(201).json({
       message: "Comment added",
@@ -1449,6 +2028,13 @@ exports.editComment = async (req, res) => {
 
     comment.text = text;
     await board.save();
+    
+    // Populate the updated comment with user data
+    await Board.populate(board, {
+      path: 'columns.tasks.comments.user',
+      select: 'name email'
+    });
+    
     await ActivityLog.create({
       board: board._id,
       user: req.user._id,

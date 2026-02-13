@@ -12,13 +12,16 @@ const {
     deleteColumn,
     addMemberToBoard,
     softDeleteBoard,
+    restoreSoftDeletedBoard,
     permanentDeleteBoard,
     removeMemberFromBoard,
     changeMemberRole,
     editBoard,
     getBoardMembers,
     leaveBoard,
+    cancelInvitation,
     completeBoard,
+    restoreBoard,
     editTask,
     deleteTask,
     reorderTasks,
@@ -32,11 +35,15 @@ const {
     getBoardChat,
 } = require("../controllers/boardController");
 
+// ===== GET ROUTES =====
 // Get activity logs for a board
 router.get("/:boardId/activity", protect, getBoardActivityLogs);
 
-// Create board
-router.post("/", protect, createBoard);
+// Get chat messages for a board    
+router.get("/:boardId/chat", protect, getBoardChat);
+
+// Get board members
+router.get("/:boardId/members", protect, getBoardMembers);
 
 // Get all boards user is part of
 router.get("/", protect, getMyBoards);
@@ -44,11 +51,12 @@ router.get("/", protect, getMyBoards);
 // Get single board (permission check inside controller)
 router.get("/:id", protect, getBoardById);
 
-// Get chat messages for a board    
-router.get("/:boardId/chat", protect, getBoardChat);
+// ===== POST ROUTES =====
+// Create board
+router.post("/", protect, createBoard);
 
-// Move task between columns
-router.put("/:boardId/tasks/move", protect, moveTask);
+// Add comment to a task
+router.post("/:boardId/columns/:columnId/tasks/:taskId/comments", protect, addComment);
 
 // Add task to a column
 router.post("/:boardId/columns/:columnId/tasks", protect, addTaskToColumn);
@@ -56,61 +64,69 @@ router.post("/:boardId/columns/:columnId/tasks", protect, addTaskToColumn);
 // Create a new column in a board
 router.post("/:boardId/columns", protect, createColumn);
 
-// Delete a column from a board
-router.delete("/:boardId/columns/:columnId", protect, deleteColumn);
-
 // Add member to board
 router.post("/:boardId/members", protect, addMemberToBoard);
+
+// ===== PUT ROUTES (SPECIFIC FIRST, GENERIC LAST) =====
+// Restore soft deleted board (most specific)
+router.put("/:boardId/soft-delete/restore", protect, restoreSoftDeletedBoard);
 
 // Soft delete a board
 router.put("/:boardId/soft-delete", protect, softDeleteBoard);
 
-// Permanent delete a board
-router.delete("/:boardId", protect, permanentDeleteBoard);
-
-// Remove member from board
-router.delete("/:boardId/members/:userId", protect, removeMemberFromBoard);
-
-// Change member role in board
-router.put(  "/:boardId/members/:userId/role",  protect,  changeMemberRole);
-
-// Edit board details
-router.put("/:boardId", protect, editBoard);
-
-// Get board members
-router.get("/:boardId/members", protect, getBoardMembers);
-
-// Leave board not by owner but by member decision
+// Leave board
 router.put("/:boardId/leave", protect, leaveBoard);
 
 // Mark board as completed
 router.put("/:boardId/complete", protect, completeBoard);
 
-// DELETE a task within a column
-router.delete(  "/:boardId/columns/:columnId/tasks/:taskId",  protect,  deleteTask);
-  
-// Reorder tasks within a column
-router.put(  "/:boardId/columns/:columnId/tasks/reorder",  protect,  reorderTasks);
+// Restore board from completed to active
+router.put("/:boardId/restore", protect, restoreBoard);
 
-// Edit a task within a column
-router.put(  "/:boardId/columns/:columnId/tasks/:taskId",  protect,  editTask);
-
-// Assign a task to a user
-router.put(  "/:boardId/columns/:columnId/tasks/:taskId/assign",  protect,  assignTask);
+// Move task between columns
+router.put("/:boardId/tasks/move", protect, moveTask);
 
 // Reorder columns within a board
-router.put(  "/:boardId/columns/reorder",  protect,  reorderColumns);
+router.put("/:boardId/reorder-columns", protect, reorderColumns);
 
-// Rename a column within a board
-router.put(  "/:boardId/columns/:columnId",  protect,  renameColumn);
+// Reorder tasks within a column
+router.put("/:boardId/columns/:columnId/tasks/reorder", protect, reorderTasks);
 
-//add comment to a task
-router.post("/:boardId/columns/:columnId/tasks/:taskId/comments", protect, addComment);
+// Assign a task to a user
+router.put("/:boardId/columns/:columnId/tasks/:taskId/assign", protect, assignTask);
 
-//edit comment on a task
+// Edit comment on a task
 router.put("/:boardId/columns/:columnId/tasks/:taskId/comments/:commentId", protect, editComment);
 
-//delete comment on a task
+// Edit a task within a column
+router.put("/:boardId/columns/:columnId/tasks/:taskId", protect, editTask);
+
+// Rename a column within a board
+router.put("/:boardId/columns/:columnId", protect, renameColumn);
+
+// Change member role in board
+router.put("/:boardId/members/:userId/role", protect, changeMemberRole);
+
+// Edit board details (GENERIC - MUST BE LAST PUT ROUTE)
+router.put("/:boardId", protect, editBoard);
+
+// ===== DELETE ROUTES (SPECIFIC FIRST, GENERIC LAST) =====
+// Delete comment on a task
 router.delete("/:boardId/columns/:columnId/tasks/:taskId/comments/:commentId", protect, deleteComment);
+
+// Delete a task within a column
+router.delete("/:boardId/columns/:columnId/tasks/:taskId", protect, deleteTask);
+
+// Delete a column from a board
+router.delete("/:boardId/columns/:columnId", protect, deleteColumn);
+
+// Cancel invitation
+router.delete("/:boardId/invitations", protect, cancelInvitation);
+
+// Remove member from board
+router.delete("/:boardId/members/:userId", protect, removeMemberFromBoard);
+
+// Permanent delete a board (GENERIC - MUST BE LAST DELETE ROUTE)
+router.delete("/:boardId", protect, permanentDeleteBoard);
 
 module.exports = router;

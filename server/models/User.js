@@ -17,20 +17,33 @@ const userSchema = new mongoose.Schema(
 
     password: {
       type: String,
-      required: true,
       minlength: 6,
     },
+
+    googleId: {
+      type: String,
+    },
+
+    authProvider: {
+      type: String,
+      enum: ["local", "google"],
+      default: "local",
+    },
+
+    resetPasswordToken: String,
+    resetPasswordExpire: Date,
   },
   { timestamps: true }
 );
 const bcrypt = require("bcryptjs");
-
 userSchema.pre("save", async function () {
-  if (!this.isModified("password")) return ;
+  if (!this.password || !this.isModified("password")) {
+    return;
+  }
 
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
-  
 });
+
 
 module.exports = mongoose.model("User", userSchema);
