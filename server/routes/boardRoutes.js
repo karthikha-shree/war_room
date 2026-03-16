@@ -18,6 +18,7 @@ const {
     changeMemberRole,
     editBoard,
     getBoardMembers,
+    getBoardInvitations,
     leaveBoard,
     cancelInvitation,
     completeBoard,
@@ -44,6 +45,9 @@ router.get("/:boardId/chat", protect, getBoardChat);
 
 // Get board members
 router.get("/:boardId/members", protect, getBoardMembers);
+
+// Get board invitations  
+router.get("/:boardId/invitations", protect, getBoardInvitations);
 
 // Get all boards user is part of
 router.get("/", protect, getMyBoards);

@@ -313,3 +313,13 @@ export const getBoardActivity = async (boardId) => {
     throw error.response?.data?.message || "Something went wrong";
   }
 };
+
+// Get board chat messages
+export const getBoardMessages = async (boardId) => {
+  try {
+    const response = await axios.get(`/boards/${boardId}/chat`);
+    return response.data;
+  } catch (error) {
+    throw error.response?.data?.message || "Something went wrong";
+  }
+};

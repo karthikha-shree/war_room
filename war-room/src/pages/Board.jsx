@@ -3,10 +3,12 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { getBoardById, addList, addCard, deleteColumn, deleteTask, updateCard, renameBoard, archiveBoard, renameColumn, moveTask, reorderTasks, reorderColumns, addMember, removeMember, leaveBoard, changeMemberRole } from "../api/boardApi";
 import { getCurrentUser } from "../api/authApi";
-import { MemberModal, Card, ActivityPanel } from "../components";
+import { MemberModal, Card, ActivityPanel, ChatPanel } from "../components";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { toast } from "sonner";
 import { joinBoard, leaveBoard as leaveSocketBoard } from "../socket";
+import { Group, Panel, Separator } from "react-resizable-panels";
+import RightPanel from "../components/RightPanel";
 
 export default function Board() {
   const { id } = useParams();
@@ -45,13 +47,9 @@ export default function Board() {
   const [addingMember, setAddingMember] = useState(false);
   const [showMembersList, setShowMembersList] = useState(false);
   
-  // Member modal state
-  const [memberModalOpen, setMemberModalOpen] = useState(false);
-  
-  // Activity panel state
-  const [activityPanelOpen, setActivityPanelOpen] = useState(false);
+  // Member modal state - removed as functionality moved to RightPanel
+  // const [memberModalOpen, setMemberModalOpen] = useState(false);
 
-  // Fetch user data if name is missing
   useEffect(() => {
     if (user && !user.name) {
       getCurrentUser()
@@ -594,7 +592,7 @@ export default function Board() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="h-screen overflow-hidden bg-gray-50 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
           <p className="text-gray-600 text-lg font-medium">Loading board...</p>
@@ -605,7 +603,7 @@ export default function Board() {
 
   if (error && !board) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="h-screen overflow-hidden bg-gray-50 flex items-center justify-center">
         <div className="bg-white p-8 rounded-lg shadow-xl max-w-md">
           <div className="text-center">
             <svg
@@ -636,11 +634,13 @@ export default function Board() {
   }
 
   return (
-    <div className={`min-h-screen bg-gray-50 transition-all duration-300 ${
-      activityPanelOpen ? 'mr-80' : ''
-    }`}>
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b border-gray-200">
+    <div className="h-screen overflow-hidden flex flex-col">
+      <Group direction="horizontal" className="h-full w-full flex overflow-hidden">
+        <Panel defaultSize={70} minSize={50}>
+          <div className="flex-1 overflow-hidden">
+            <div className="h-full flex flex-col bg-gray-50">
+          {/* Header */}
+          <div className="bg-white shadow-sm border-b border-gray-200">
         <div className="px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
@@ -710,26 +710,7 @@ export default function Board() {
                     }
                     return null;
                   })()}
-                  <button
-                    onClick={() => setMemberModalOpen(true)}
-                    className="ml-4 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 transition flex items-center gap-2"
-                    title="Manage members"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-                    </svg>
-                    Members
-                  </button>
-                  <button
-                    onClick={() => setActivityPanelOpen(true)}
-                    className="ml-2 px-4 py-2 bg-gray-600 text-white text-sm font-medium rounded hover:bg-gray-700 transition flex items-center gap-2"
-                    title="View activity log"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    Activity
-                  </button>
+
                 </div>
               )}
             </div>
@@ -813,25 +794,23 @@ export default function Board() {
         </div>
       </div>
 
-      {/* Error Alert */}
-      {error && (
-        <div className="mx-6 mt-4">
-          <div className="bg-red-500 text-white px-4 py-3 rounded-lg shadow-lg flex items-center justify-between">
-            <span>{error}</span>
-            <button onClick={() => setError("")} className="text-white hover:text-red-200">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      )}
+          {/* Error Alert */}
+          {error && (
+            <div className="mx-6 mt-4">
+              <div className="bg-red-500 text-white px-4 py-3 rounded-lg shadow-lg flex items-center justify-between">
+                <span>{error}</span>
+                <button onClick={() => setError("")} className="text-white hover:text-red-200">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          )}
 
-
-
-      {/* Board Content - Horizontal Scrolling Lists */}
-      <div className="p-6 overflow-x-auto">
-        <DragDropContext onDragEnd={onDragEnd}>
+          {/* Board Content - Horizontal Scrolling Lists */}
+          <div className="h-full overflow-x-auto overflow-y-hidden p-6">
+            <DragDropContext onDragEnd={onDragEnd}>
           <Droppable droppableId="all-columns" direction="horizontal" type="COLUMN">
             {(provided) => (
               <div
@@ -937,24 +916,27 @@ export default function Board() {
               </div>
             )}
           </Droppable>
-        </DragDropContext>
-      </div>
-      
-      {/* Member Modal */}
-      {memberModalOpen && (
-        <MemberModal
-          board={board}
-          onClose={() => setMemberModalOpen(false)}
-          refreshBoard={refreshBoard}
-        />
-      )}
-      
-      {/* Activity Panel */}
-      <ActivityPanel
-        boardId={id}
-        isOpen={activityPanelOpen}
-        onClose={() => setActivityPanelOpen(false)}
-      />
+            </DragDropContext>
+          </div>
+            </div>
+          </div>
+        </Panel>
+
+        <Separator className="w-2 bg-gray-200 hover:bg-gray-300 transition-colors" />
+
+        <Panel defaultSize={30} minSize={25}>
+          <div className="h-full flex flex-col border-l bg-white">
+            <div className="flex-1 overflow-hidden">
+              <RightPanel
+                boardId={id}
+                board={board}
+                members={board?.members || []}
+                refreshBoard={refreshBoard}
+              />
+            </div>
+          </div>
+        </Panel>
+      </Group>
     </div>
   );
 }

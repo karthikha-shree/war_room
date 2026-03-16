@@ -1363,6 +1363,42 @@ exports.getBoardMembers = async (req, res) => {
   }
 };
 
+// GET BOARD INVITATIONS
+exports.getBoardInvitations = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const userId = req.user._id;
+
+    const board = await Board.findById(boardId)
+      .populate("createdBy", "name email");
+
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    // 🔒 Check if user is owner or member  
+    const isOwner = board.createdBy._id.toString() === userId.toString();
+    const isMember = board.members.some(
+      (m) => m.user.toString() === userId.toString()
+    );
+
+    if (!isOwner && !isMember) {
+      return res
+        .status(403)
+        .json({ message: "You are not a member of this board" });
+    }
+
+    res.status(200).json({
+      invitations: board.invitedMembers || []
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to fetch board invitations",
+      error: error.message,
+    });
+  }
+};
+
 
 // LEAVE BOARD (MEMBER / ADMIN ONLY)
 exports.leaveBoard = async (req, res) => {

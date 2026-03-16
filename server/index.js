@@ -47,14 +47,6 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
   .catch(err => console.error(err));
 
-// const server = http.createServer(app);
-
-// const io = new Server(server, {
-//   cors: {
-//     origin: "*",
-//   },
-// });
-
 io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth?.token;
