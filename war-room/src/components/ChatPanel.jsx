@@ -166,7 +166,7 @@ export default function ChatPanel({ boardId }) {
                                                 {senderName}
                                             </span>
                                         )}
-                                        <div className={`max-w-xs px-4 py-2 rounded-2xl text-sm break-words ${
+                                        <div className={`max-w-xs px-4 py-2 rounded-2xl text-sm wrap-break-word ${
                                             isOwnMessage 
                                                 ? 'bg-blue-500 text-white'
                                                 : 'bg-gray-200 text-black'
