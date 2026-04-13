@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import ChatPanel from './ChatPanel';
 import ActivityPanel from './ActivityPanel';
+import GitHubPanel from './GitHubPanel';
 import { useAuth } from '../context/AuthContext';
 import { addMember, changeMemberRole, removeMember, cancelInvitation } from '../api/boardApi';
 import { toast } from 'sonner';
@@ -127,7 +128,8 @@ const RightPanel = ({ boardId, board, members, refreshBoard }) => {
   const tabs = [
     { id: 'chat', label: 'Chat' },
     { id: 'activity', label: 'Activity' },
-    { id: 'members', label: 'Members' }
+    { id: 'members', label: 'Members' },
+    { id: 'github', label: 'GitHub' }
   ];
 
   const renderTabContent = () => {
@@ -337,6 +339,7 @@ const RightPanel = ({ boardId, board, members, refreshBoard }) => {
       {/* Tab Content */}
       <div className="flex-1 overflow-hidden">
         {renderTabContent()}
+        {activeTab === "github" && <GitHubPanel boardId={boardId} />}
       </div>
     </div>
   );

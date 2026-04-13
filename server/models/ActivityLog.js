@@ -52,6 +52,10 @@ const activityLogSchema = new mongoose.Schema(
         "BOARD_DELETED_PERMANENT",
         "BOARD_SOFT_DELETED",
         "BOARD_SOFT_DELETE_RESTORED",
+
+        // GITHUB
+        "GITHUB_REPO_UPDATED",
+        "GITHUB_DATA_FETCHED",
       ],
     },
 

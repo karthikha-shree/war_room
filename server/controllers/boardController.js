@@ -2151,3 +2151,170 @@ exports.deleteComment = async (req, res) => {
   }
 };
 
+const parseGitHubRepoUrl = (repoUrl) => {
+  try {
+    const parsed = new URL(repoUrl);
+
+    if (parsed.hostname !== "github.com" && parsed.hostname !== "www.github.com") {
+      return null;
+    }
+
+    const cleanPath = parsed.pathname.replace(/^\/+|\/+$/g, "");
+    const parts = cleanPath.split("/");
+
+    if (parts.length < 2) {
+      return null;
+    }
+
+    const owner = parts[0];
+    const repo = parts[1].replace(/\.git$/, "");
+
+    if (!owner || !repo) {
+      return null;
+    }
+
+    return { owner, repo };
+  } catch (error) {
+    return null;
+  }
+};
+
+// PATCH /boards/:boardId/github
+exports.updateBoardGitHubRepo = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+    const { githubRepo } = req.body;
+
+    if (!githubRepo || typeof githubRepo !== "string") {
+      return res.status(400).json({ message: "GitHub repository URL is required" });
+    }
+
+    const parsedRepo = parseGitHubRepoUrl(githubRepo.trim());
+    if (!parsedRepo) {
+      return res.status(400).json({ message: "Invalid GitHub repository URL" });
+    }
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    if (!isBoardMember(board, req.user._id)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    board.githubRepo = githubRepo.trim();
+    await board.save();
+
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "GITHUB_REPO_UPDATED",
+      meta: {
+        githubRepo: board.githubRepo,
+      },
+    });
+
+    return res.status(200).json(board);
+  } catch (error) {
+    console.error("UPDATE BOARD GITHUB REPO ERROR:", error);
+    return res.status(500).json({
+      message: "Failed to update GitHub repository",
+      error: error.message,
+    });
+  }
+};
+
+// GET /boards/:boardId/github
+exports.getBoardGitHubData = async (req, res) => {
+  try {
+    const { boardId } = req.params;
+
+    const board = await Board.findById(boardId);
+    if (!board) {
+      return res.status(404).json({ message: "Board not found" });
+    }
+
+    if (!isBoardMember(board, req.user._id)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    if (!board.githubRepo) {
+      return res.status(400).json({ message: "No GitHub repository linked to this board" });
+    }
+
+    const parsedRepo = parseGitHubRepoUrl(board.githubRepo);
+    if (!parsedRepo) {
+      return res.status(400).json({ message: "Invalid GitHub repository URL" });
+    }
+
+    const { owner, repo } = parsedRepo;
+    const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
+    const requestHeaders = {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "war-room-app",
+    };
+
+    const repoResponse = await fetch(baseUrl, { headers: requestHeaders });
+
+    if (repoResponse.status === 404) {
+      return res.status(404).json({ message: "GitHub repository not found" });
+    }
+
+    if (!repoResponse.ok) {
+      return res.status(502).json({ message: "GitHub API failure" });
+    }
+
+    const [repoData, commitsResponse, pullsResponse] = await Promise.all([
+      repoResponse.json(),
+      fetch(`${baseUrl}/commits?per_page=5`, { headers: requestHeaders }),
+      fetch(`${baseUrl}/pulls?state=open`, { headers: requestHeaders }),
+    ]);
+
+    if (!commitsResponse.ok || !pullsResponse.ok) {
+      return res.status(502).json({ message: "GitHub API failure" });
+    }
+
+    const [commitsData, pullsData] = await Promise.all([
+      commitsResponse.json(),
+      pullsResponse.json(),
+    ]);
+
+    await ActivityLog.create({
+      board: board._id,
+      user: req.user._id,
+      action: "GITHUB_DATA_FETCHED",
+      meta: {
+        githubRepo: board.githubRepo,
+        repo: repoData.full_name,
+      },
+    });
+
+    return res.status(200).json({
+      repo: {
+        name: repoData.full_name,
+        stars: repoData.stargazers_count,
+        updatedAt: repoData.updated_at,
+        url: repoData.html_url,
+      },
+      commits: (Array.isArray(commitsData) ? commitsData : []).slice(0, 5).map((commit) => ({
+        message: commit?.commit?.message || "",
+        author: commit?.commit?.author?.name || "Unknown",
+        date: commit?.commit?.author?.date || null,
+      })),
+      pulls: (Array.isArray(pullsData) ? pullsData : []).map((pull) => ({
+        title: pull?.title || "",
+        user: pull?.user?.login || "Unknown",
+        status: pull?.state || "open",
+        url: pull?.html_url || "",
+      })),
+    });
+  } catch (error) {
+    console.error("GET BOARD GITHUB DATA ERROR:", error);
+    return res.status(500).json({
+      message: "Failed to fetch GitHub data",
+      error: error.message,
+    });
+  }
+};
+

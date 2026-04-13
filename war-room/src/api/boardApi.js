@@ -323,3 +323,14 @@ export const getBoardMessages = async (boardId) => {
     throw error.response?.data?.message || "Something went wrong";
   }
 };
+
+// GitHub API functions
+export const getBoardGitHub = async (boardId) => {
+  const res = await axios.get(`/boards/${boardId}/github`);
+  return res.data;
+};
+
+export const updateBoardGitHub = async (boardId, githubRepo) => {
+  const res = await axios.patch(`/boards/${boardId}/github`, { githubRepo });
+  return res.data;
+};

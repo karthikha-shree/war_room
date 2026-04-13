@@ -34,6 +34,8 @@ const {
     deleteComment,
     getBoardActivityLogs,
     getBoardChat,
+    updateBoardGitHubRepo,
+    getBoardGitHubData,
 } = require("../controllers/boardController");
 
 // ===== GET ROUTES =====
@@ -42,6 +44,9 @@ router.get("/:boardId/activity", protect, getBoardActivityLogs);
 
 // Get chat messages for a board    
 router.get("/:boardId/chat", protect, getBoardChat);
+
+// Get GitHub repository data for a board
+router.get("/:boardId/github", protect, getBoardGitHubData);
 
 // Get board members
 router.get("/:boardId/members", protect, getBoardMembers);
@@ -113,6 +118,9 @@ router.put("/:boardId/members/:userId/role", protect, changeMemberRole);
 
 // Edit board details (GENERIC - MUST BE LAST PUT ROUTE)
 router.put("/:boardId", protect, editBoard);
+
+// Update GitHub repository link for a board
+router.patch("/:boardId/github", protect, updateBoardGitHubRepo);
 
 // ===== DELETE ROUTES (SPECIFIC FIRST, GENERIC LAST) =====
 // Delete comment on a task

@@ -176,6 +176,12 @@ const boardSchema = new mongoose.Schema(
       default: "active",
     },
 
+    githubRepo: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
     deletedFor: [
       {
         type: mongoose.Schema.Types.ObjectId,
